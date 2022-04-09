@@ -8,6 +8,7 @@ use crate::{
 pub struct AccountStorage<'a> {
     /// We use this to let the code start an own "connection" to the
     /// "database" and search through the history if needed to handle disputes
+    #[allow(unused)]
     tx_path: &'a str,
     accounts: BTreeMap<u16, Account>,
 }

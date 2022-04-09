@@ -11,9 +11,9 @@ default-run = "main"
 name = "main"
 path = "src/main.rs"
 
-[[bin]]
-name = "datagen"
-path = "src/datagen.rs"
+# [[bin]]
+# name = "datagen"
+# path = "src/datagen.rs"
 
 
 

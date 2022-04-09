@@ -62,6 +62,7 @@ impl Input {
     }
 
     /// only to create easier test transactions
+    #[allow(unused)]
     pub fn new(r#type: TransactionType, client: u16, tx: u32, amount: Option<f64>) -> Self {
         Self {
             r#type,
@@ -72,6 +73,7 @@ impl Input {
     }
 
     /// Get the input's amount.
+    #[allow(unused)]
     pub fn amount(&self) -> Option<f64> {
         self.amount
     }
