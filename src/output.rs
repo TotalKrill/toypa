@@ -22,15 +22,15 @@ impl Output {
     }
 }
 
-pub fn print_from_accounts(accounts: accounts::AccountStorage) -> () {
+pub fn print_from_accounts(accountstore: accounts::AccountStorage) -> () {
     // using csv writer for this, just seems uneccesary...
     // especially since no formatting rules are really in effect
 
     println!("client, available, held, total, locked");
 
-    for (client, account) in accounts {
+    for (client, account) in accountstore.accounts() {
         let out = Output {
-            client,
+            client: *client,
             available: account.available().to_f64(),
             held: account.held().to_f64(),
             total: account.total().to_f64(),

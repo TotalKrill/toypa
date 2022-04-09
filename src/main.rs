@@ -1,4 +1,3 @@
-//type FixedPoint = f64;
 use tokio_stream::StreamExt;
 
 mod accounts;
@@ -18,7 +17,7 @@ async fn main() {
 
     let mut csv_reader = input::create_input_deserializer(&filename).await;
 
-    let mut accounts = accounts::AccountStorage::new();
+    let mut accounts = accounts::AccountStorage::new(&filename);
 
     let mut csv_iter = csv_reader.deserialize::<input::Input>();
 

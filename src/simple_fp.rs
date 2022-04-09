@@ -21,12 +21,12 @@ impl FixedPoint {
     }
     pub fn to_f32(self) -> f32 {
         let f = self.0 as f32;
-        let f = f / 1000.0;
+        let f = f / 10000.0;
         f
     }
     pub fn to_f64(self) -> f64 {
         let f = self.0 as f64;
-        let f = f / 1000.0;
+        let f = f / 10000.0;
         f
     }
 }
@@ -89,7 +89,15 @@ mod tests {
         let fp = FixedPoint::from_f64(v);
 
         assert_eq!(1234, fp.0);
+        assert_eq!(0.1234, fp.to_f64());
 
-        assert_eq!(0.1234, fp.to_f64())
+        let v = -0.123;
+        let fp = FixedPoint::from_f64(v);
+        assert_eq!(-1230, fp.0);
+        assert_eq!(-0.123, fp.to_f64());
+        let v = -1.0;
+        let fp = FixedPoint::from_f64(v);
+        assert_eq!(-10000, fp.0);
+        assert_eq!(-1.0, fp.to_f64());
     }
 }

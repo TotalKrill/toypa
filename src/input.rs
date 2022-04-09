@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::FixedPoint;
 
 use csv_async::AsyncDeserializer;
@@ -59,7 +61,6 @@ impl Input {
         self.tx
     }
 
-    #[cfg(test)]
     /// only to create easier test transactions
     pub fn new(r#type: TransactionType, client: u16, tx: u32, amount: Option<f64>) -> Self {
         Self {
@@ -68,6 +69,11 @@ impl Input {
             tx,
             amount,
         }
+    }
+
+    /// Get the input's amount.
+    pub fn amount(&self) -> Option<f64> {
+        self.amount
     }
 }
 
@@ -90,6 +96,19 @@ pub enum TransactionType {
     Dispute,
     Resolve,
     Chargeback,
+}
+
+impl Display for TransactionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            TransactionType::Deposit => "deposit",
+            TransactionType::Withdrawal => "withdrawal",
+            TransactionType::Dispute => "dispute",
+            TransactionType::Resolve => "resolve",
+            TransactionType::Chargeback => "chargeback",
+        };
+        f.write_str(s)
+    }
 }
 
 #[cfg(test)]

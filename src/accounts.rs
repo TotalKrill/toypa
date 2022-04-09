@@ -1,11 +1,34 @@
-use std::collections::BTreeMap;
+use std::collections::{btree_map, BTreeMap};
 
 use crate::{
     input::{Input, TransactionType},
     FixedPoint,
 };
 
-pub type AccountStorage<'a> = BTreeMap<u16, Account>;
+pub struct AccountStorage<'a> {
+    /// We use this to let the code start an own "connection" to the
+    /// "database" and search through the history if needed to handle disputes
+    tx_path: &'a str,
+    accounts: BTreeMap<u16, Account>,
+}
+
+impl<'a> AccountStorage<'a> {
+    pub fn new(tx_path: &'a str) -> Self {
+        Self {
+            tx_path,
+            accounts: BTreeMap::new(),
+        }
+    }
+
+    pub fn entry(&mut self, client: u16) -> btree_map::Entry<'_, u16, Account> {
+        self.accounts.entry(client)
+    }
+
+    /// Get a reference to the account storage's accounts.
+    pub fn accounts(&self) -> &BTreeMap<u16, Account> {
+        &self.accounts
+    }
+}
 
 #[derive(Debug)]
 pub enum TransactionError {
@@ -100,6 +123,10 @@ impl<'a> Account {
                 // Safe because of the validity check on the transaction
                 let amount = transaction.amount_as_fp().unwrap();
                 self.deposit(amount);
+
+                //TODO: dont store them all, just search through the file instead
+                self.tx_history.insert(transaction.tx(), transaction);
+
                 Ok(())
             }
             TransactionType::Withdrawal => {
@@ -120,9 +147,6 @@ impl<'a> Account {
             TransactionType::Chargeback => self.chargeback(transaction.tx()),
         };
 
-        if let Ok(_) = tx_res {
-            self.tx_history.insert(transaction.tx(), transaction);
-        }
         tx_res
     }
 
@@ -149,9 +173,15 @@ impl<'a> Account {
             .get_mut(&tx)
             .ok_or(TransactionError::MissingDisputeTx)?;
 
+        println!("checking dispute state input {:?}", input);
         if *dispute == DisputeState::Started {
+            println!("dispute has started");
             if let Some(amount) = input.amount_as_fp() {
-                self.held -= amount;
+                println!("the tx in question has an amount");
+                if self.held <= amount {
+                    println!("the held amount covers the dispute reimbursement");
+                    self.held -= amount;
+                }
             }
             *dispute = DisputeState::Reimbursed;
             self.lock();
@@ -165,6 +195,7 @@ impl<'a> Account {
         let input = self
             .search_for_tx(tx)
             .ok_or(TransactionError::MissingTxId)?;
+
         // fetch the the tx under dispute, apply the reverse if state is disputed
         let dispute = self
             .disputes
@@ -319,5 +350,36 @@ mod tests {
         assert_eq!(5.0, account.available());
         assert_eq!(50.0, account.held());
         assert_eq!(55.0, account.total());
+    }
+
+    #[tokio::test]
+    async fn account_dispute_chargeback() {
+        let mut account = Account::new();
+
+        let deposit = Input::new(TransactionType::Deposit, 1, 1, Some(50.0));
+        let res = account.handle_transaction(deposit);
+        if let Err(e) = res {
+            assert!(true, "{:?}", e);
+        }
+
+        let dispute = Input::new(TransactionType::Dispute, 1, 1, None);
+        let res = account.handle_transaction(dispute);
+        if let Err(e) = res {
+            assert!(true, "{:?}", e);
+        }
+        assert_eq!(0.0, account.available());
+        assert_eq!(50.0, account.held());
+        assert_eq!(50.0, account.total());
+        assert_eq!(false, account.locked(), "account locked state was wrong");
+
+        let chargeback = Input::new(TransactionType::Chargeback, 1, 1, None);
+        let res = account.handle_transaction(chargeback);
+        if let Err(e) = res {
+            assert!(true, "{:?}", e);
+        }
+        assert_eq!(0.0, account.held(), "held amount was wrong");
+        assert_eq!(0.0, account.available(), "available amount was wrong");
+        assert_eq!(0.0, account.total(), "total amount was wrong");
+        assert_eq!(true, account.locked(), "account locked state was wrong");
     }
 }
