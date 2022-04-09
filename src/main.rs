@@ -16,27 +16,31 @@ async fn main() {
         .expect("Expected file name as argument");
 
     let mut csv_reader = input::create_input_deserializer(&filename).await;
+    let csv_iter = csv_reader.deserialize::<input::Input>();
 
-    let mut accounts = accounts::AccountStorage::new(&filename);
+    let mut accounts = accounts::AccountStorage::new(filename);
 
-    let mut csv_iter = csv_reader.deserialize::<input::Input>();
-
-    while let Some(csv_res) = csv_iter.next().await {
-        // every entry is an result, we just ignore any faulty parsed input for this case
-        if let Ok(input) = csv_res {
-            // then check the accountstorage for an existing account,
-            // if none exists, we should create one,
-            // and then try to apply the transaction to that account if valid,
+    let mut filter = csv_iter.filter_map(|item| {
+        if let Ok(input) = item {
             if input.valid() {
-                let entry = accounts
-                    .entry(input.client())
-                    .or_insert(accounts::Account::new());
-
-                // We could check how the transaction went, if we wanted to
-                let _res = entry.handle_transaction(input);
+                return Some(input);
             }
         }
+        None
+    });
+
+    while let Some(input) = filter.next().await {
+        let entry = accounts.get(input.client());
+
+        // We could check how the transaction went, if we wanted to
+        let _e = entry.handle_transaction(input).await;
     }
 
-    output::print_from_accounts(accounts);
+    let mut map = std::collections::HashMap::new();
+    for (client, account) in accounts.into_accounts().drain() {
+        let account = account.close().await;
+        map.insert(client.clone(), account);
+    }
+
+    output::print_from_accounts_map(map);
 }

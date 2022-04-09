@@ -1,32 +1,89 @@
-use std::collections::{btree_map, BTreeMap};
+use std::collections::{btree_map, BTreeMap, HashMap};
+use std::sync::Arc;
+use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use crate::{
-    input::{Input, TransactionType},
+    input::{self, Input, TransactionType},
     FixedPoint,
 };
 
-pub struct AccountStorage<'a> {
-    /// We use this to let the code start an own "connection" to the
-    /// "database" and search through the history if needed to handle disputes
-    tx_path: &'a str,
-    accounts: BTreeMap<u16, Account>,
+type AccountPlace = Account;
+// type Accounts = BTreeMap<u16, AccountPlace>;
+type Accounts = HashMap<u16, AccountHandler>;
+
+enum Action {
+    Input(input::Input),
+    Close,
 }
 
-impl<'a> AccountStorage<'a> {
-    pub fn new(tx_path: &'a str) -> Self {
+pub struct AccountHandler {
+    action_sender: Sender<Action>,
+    handle: JoinHandle<Account>,
+}
+
+impl AccountHandler {
+    pub fn new(tx_path: String) -> Self {
+        let (action_sender, mut rx) = channel(100);
+
+        let handle = tokio::task::spawn(async move {
+            let mut account = Account::new();
+            while let Some(action) = rx.recv().await {
+                match action {
+                    Action::Input(input) => {
+                        let _e = account.handle_transaction(input).await;
+                    }
+                    Action::Close => {
+                        break;
+                    }
+                };
+            }
+            account
+        });
+
+        Self {
+            action_sender,
+            handle: handle,
+        }
+    }
+    pub async fn handle_transaction(&self, input: input::Input) {
+        let input = Action::Input(input);
+        let _e = self.action_sender.send(input).await;
+    }
+    pub async fn close(self) -> Account {
+        self.action_sender.send(Action::Close).await;
+        self.handle.await.unwrap()
+    }
+}
+
+pub struct AccountStorage {
+    /// We use this to let the code start an own "connection" to the
+    /// "database" and search through the history if needed to handle disputes
+    tx_path: String,
+    accounts: Accounts,
+}
+
+impl AccountStorage {
+    pub fn new(tx_path: String) -> Self {
         Self {
             tx_path,
-            accounts: BTreeMap::new(),
+            accounts: Default::default(),
         }
     }
 
-    pub fn entry(&mut self, client: u16) -> btree_map::Entry<'_, u16, Account> {
-        self.accounts.entry(client)
+    /// Get a reference to the account storage's accounts.
+    pub fn accounts(&self) -> &Accounts {
+        &self.accounts
+    }
+    pub fn into_accounts(self) -> Accounts {
+        self.accounts
     }
 
-    /// Get a reference to the account storage's accounts.
-    pub fn accounts(&self) -> &BTreeMap<u16, Account> {
-        &self.accounts
+    pub fn get(&mut self, client: u16) -> &mut AccountHandler {
+        self.accounts
+            .entry(client)
+            .or_insert(AccountHandler::new(self.tx_path.clone()))
     }
 }
 
@@ -72,13 +129,13 @@ pub struct Account {
     locked: bool,
 
     /// Just store an entire history of each transaction performed
-    tx_history: BTreeMap<u32, Input>,
+    tx_history_db: BTreeMap<u32, Input>,
 
     /// disputes
-    disputes: BTreeMap<u32, DisputeState>,
+    disputes: BTreeMap<u32, (Input, DisputeState)>,
 }
 
-impl<'a> Account {
+impl Account {
     /// Generates a new empty Account
     pub fn new() -> Self {
         Account {
@@ -86,7 +143,8 @@ impl<'a> Account {
             held: FixedPoint::from_f64(0.0),
             locked: false,
             disputes: BTreeMap::new(),
-            tx_history: BTreeMap::new(),
+
+            tx_history_db: Default::default(),
         }
     }
     /// available
@@ -106,7 +164,7 @@ impl<'a> Account {
         self.locked = true;
     }
 
-    pub fn handle_transaction(&mut self, transaction: Input) -> Result<(), TransactionError> {
+    pub async fn handle_transaction(&mut self, transaction: Input) -> Result<(), TransactionError> {
         if !transaction.valid() {
             return Err(TransactionError::InvalidTx);
         }
@@ -123,10 +181,8 @@ impl<'a> Account {
                 // Safe because of the validity check on the transaction
                 let amount = transaction.amount_as_fp().unwrap();
                 self.deposit(amount);
-
-                //TODO: dont store them all, just search through the file instead
-                self.tx_history.insert(transaction.tx(), transaction);
-
+                self.tx_history_db
+                    .insert(transaction.tx(), transaction.clone());
                 Ok(())
             }
             TransactionType::Withdrawal => {
@@ -137,14 +193,14 @@ impl<'a> Account {
             TransactionType::Dispute => {
                 // we need to look back into all of the history related to this client ( and this client only ),
                 // to validate wheter the TX exists, and then we need to hold the amount found in that tx
-                self.dispute(transaction.tx())
+                self.dispute(transaction.tx()).await
             }
             TransactionType::Resolve => {
                 // We shall unlock the held funds, if the held funds exist ofcourse
                 // If the held funds are already spent, for example by a withdrawal, then a dispute
-                self.resolve(transaction.tx())
+                self.resolve(transaction.tx()).await
             }
-            TransactionType::Chargeback => self.chargeback(transaction.tx()),
+            TransactionType::Chargeback => self.chargeback(transaction.tx()).await,
         };
 
         tx_res
@@ -163,12 +219,8 @@ impl<'a> Account {
         }
     }
 
-    fn chargeback(&mut self, tx: u32) -> Result<(), TransactionError> {
-        let input = self
-            .search_for_tx(tx)
-            .ok_or(TransactionError::MissingTxId)?;
-
-        let dispute = self
+    async fn chargeback(&mut self, tx: u32) -> Result<(), TransactionError> {
+        let (input, dispute) = self
             .disputes
             .get_mut(&tx)
             .ok_or(TransactionError::MissingDisputeTx)?;
@@ -191,13 +243,9 @@ impl<'a> Account {
         }
     }
 
-    fn resolve(&mut self, tx: u32) -> Result<(), TransactionError> {
-        let input = self
-            .search_for_tx(tx)
-            .ok_or(TransactionError::MissingTxId)?;
-
+    async fn resolve(&mut self, tx: u32) -> Result<(), TransactionError> {
         // fetch the the tx under dispute, apply the reverse if state is disputed
-        let dispute = self
+        let (input, dispute) = self
             .disputes
             .get_mut(&tx)
             .ok_or(TransactionError::MissingDisputeTx)?;
@@ -223,27 +271,32 @@ impl<'a> Account {
         }
     }
 
-    fn dispute(&mut self, tx: u32) -> Result<(), TransactionError> {
+    async fn dispute(&mut self, tx: u32) -> Result<(), TransactionError> {
         // Fetch the tx that is to be disputed
         let input = self
             .search_for_tx(tx)
+            .await
             .ok_or(TransactionError::MissingTxId)?;
 
         match input.r#type() {
             TransactionType::Deposit => {
-                if self.disputes.contains_key(&tx) {
+                println!("{:?}", input);
+                if let None = self.disputes.get(&tx) {
                     Err(TransactionError::DisputeAlreadyExist)
                 } else {
                     if let Some(amount) = input.amount_as_fp() {
                         if self.available() >= amount {
-                            self.disputes.insert(tx, DisputeState::new());
+                            println!("disputed");
+                            self.disputes.insert(tx, (input, DisputeState::new()));
                             self.available -= amount;
                             self.held += amount;
                             Ok(())
                         } else {
+                            println!("insufficient amount for dispute");
                             Err(TransactionError::NotEnoughAvailableFunds)
                         }
                     } else {
+                        println!("huh");
                         Err(TransactionError::InvalidTx)
                     }
                 }
@@ -254,13 +307,27 @@ impl<'a> Account {
         // hold the funds related in the dispute
     }
 
-    fn search_for_tx(&self, tx: u32) -> Option<Input> {
-        let local = self.tx_history.get(&tx);
+    // To store on ram, we have to go spelunking in the database after the tx on disputes
+    async fn search_for_tx(&self, tx: u32) -> Option<Input> {
+        // every entry is an result, we just ignore any faulty parsed input for this case
+        let value = self.tx_history_db.get(&tx);
 
-        if let Some(_) = local {
-            local.cloned()
+        if let Some(_) = value {
+            value.cloned()
         } else {
             //TODO: For future improvements, we would have to look through an external storage of TX
+            // let mut csv_reader = input::create_input_deserializer(&self.tx_history_db).await;
+            // let csv_iter = csv_reader.deserialize::<input::Input>();
+            // use tokio_stream::StreamExt;
+            // let mut filter = csv_iter.filter_map(|input| {
+            //     if let Ok(input) = input {
+            //         if *input.r#type() == TransactionType::Deposit && input.tx() == tx {
+            //             return Some(input);
+            //         }
+            //     }
+            //     None
+            // });
+            // let value = filter.next().await;
             None
         }
     }
@@ -279,7 +346,7 @@ mod tests {
         let mut account = Account::new();
 
         let transaction = Input::new(TransactionType::Deposit, 1, 1, Some(55.1234));
-        let res = account.handle_transaction(transaction);
+        let res = account.handle_transaction(transaction).await;
         if let Err(e) = res {
             assert!(true, "{:?}", e);
         }
@@ -288,7 +355,7 @@ mod tests {
 
         // Withdrawing to much should fail
         let transaction = Input::new(TransactionType::Withdrawal, 1, 2, Some(56.1234));
-        let res = account.handle_transaction(transaction);
+        let res = account.handle_transaction(transaction).await;
         if let Err(e) = res {
             assert!(true, "{:?}", e);
         }
@@ -296,7 +363,7 @@ mod tests {
 
         // Withdrawing a small amount should work
         let transaction = Input::new(TransactionType::Withdrawal, 1, 3, Some(0.1234));
-        let res = account.handle_transaction(transaction);
+        let res = account.handle_transaction(transaction).await;
         if let Err(e) = res {
             assert!(true, "{:?}", e);
         }
@@ -305,7 +372,7 @@ mod tests {
 
         // Withdrawing a everything should work
         let transaction = Input::new(TransactionType::Withdrawal, 1, 3, Some(55.0));
-        let res = account.handle_transaction(transaction);
+        let res = account.handle_transaction(transaction).await;
         if let Err(e) = res {
             assert!(true, "{:?}", e);
         }
@@ -318,32 +385,31 @@ mod tests {
         let mut account = Account::new();
 
         let transaction = Input::new(TransactionType::Deposit, 1, 1, Some(50.0));
-        let res = account.handle_transaction(transaction);
+        let res = account.handle_transaction(transaction).await;
         if let Err(e) = res {
             assert!(true, "{:?}", e);
         }
 
         let transaction = Input::new(TransactionType::Deposit, 1, 2, Some(5.1234));
-        let res = account.handle_transaction(transaction);
+        let res = account.handle_transaction(transaction).await;
         if let Err(e) = res {
             assert!(true, "{:?}", e);
         }
-        // Withdrawing to much should fail
         assert_eq!(55.1234, account.available());
 
         // Withdrawing to much should fail
         let transaction = Input::new(TransactionType::Dispute, 1, 1, None);
-        let res = account.handle_transaction(transaction);
+        let res = account.handle_transaction(transaction).await;
         if let Err(e) = res {
             assert!(true, "{:?}", e);
         }
         assert_eq!(55.1234, account.total());
-        assert_eq!(5.1234, account.available());
         assert_eq!(50.0, account.held());
+        assert_eq!(5.1234, account.available());
 
         // Withdrawing a small amount should work, and in this case leave exactly 5.0000 left
         let transaction = Input::new(TransactionType::Withdrawal, 1, 3, Some(0.1234));
-        let res = account.handle_transaction(transaction);
+        let res = account.handle_transaction(transaction).await;
         if let Err(e) = res {
             assert!(true, "{:?}", e);
         }
@@ -357,13 +423,13 @@ mod tests {
         let mut account = Account::new();
 
         let deposit = Input::new(TransactionType::Deposit, 1, 1, Some(50.0));
-        let res = account.handle_transaction(deposit);
+        let res = account.handle_transaction(deposit).await;
         if let Err(e) = res {
             assert!(true, "{:?}", e);
         }
 
         let dispute = Input::new(TransactionType::Dispute, 1, 1, None);
-        let res = account.handle_transaction(dispute);
+        let res = account.handle_transaction(dispute).await;
         if let Err(e) = res {
             assert!(true, "{:?}", e);
         }
@@ -373,7 +439,7 @@ mod tests {
         assert_eq!(false, account.locked(), "account locked state was wrong");
 
         let chargeback = Input::new(TransactionType::Chargeback, 1, 1, None);
-        let res = account.handle_transaction(chargeback);
+        let res = account.handle_transaction(chargeback).await;
         if let Err(e) = res {
             assert!(true, "{:?}", e);
         }

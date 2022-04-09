@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::accounts;
 
 pub struct Output {
@@ -22,15 +24,15 @@ impl Output {
     }
 }
 
-pub fn print_from_accounts(accountstore: accounts::AccountStorage) -> () {
+pub fn print_from_accounts_map(accounts: HashMap<u16, crate::accounts::Account>) -> () {
     // using csv writer for this, just seems uneccesary...
     // especially since no formatting rules are really in effect
 
     println!("client, available, held, total, locked");
 
-    for (client, account) in accountstore.accounts() {
+    for (client, account) in accounts {
         let out = Output {
-            client: *client,
+            client,
             available: account.available().to_f64(),
             held: account.held().to_f64(),
             total: account.total().to_f64(),
@@ -40,3 +42,22 @@ pub fn print_from_accounts(accountstore: accounts::AccountStorage) -> () {
         println!("{}", s);
     }
 }
+
+// pub fn print_from_accounts<'a>(accountstore: accounts::AccountStorage) -> () {
+//     // using csv writer for this, just seems uneccesary...
+//     // especially since no formatting rules are really in effect
+
+//     println!("client, available, held, total, locked");
+
+//     for (client, account) in &*accountstore.accounts() {
+//         let out = Output {
+//             client: *client,
+//             available: account.available().to_f64(),
+//             held: account.held().to_f64(),
+//             total: account.total().to_f64(),
+//             locked: account.locked(),
+//         };
+//         let s = out.csv_line();
+//         println!("{}", s);
+//     }
+// }

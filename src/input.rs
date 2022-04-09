@@ -88,7 +88,7 @@ pub async fn create_input_deserializer(pathname: &str) -> AsyncDeserializer<toki
     rdr
 }
 
-#[derive(Copy, Clone, Debug, Deserialize)]
+#[derive(PartialEq, Eq, Copy, Clone, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TransactionType {
     Deposit,
@@ -128,6 +128,6 @@ mod tests {
             .collect()
             .await;
 
-        assert_eq!(8, amount.len());
+        assert_eq!(10, amount.len());
     }
 }

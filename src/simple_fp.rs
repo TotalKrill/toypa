@@ -36,20 +36,10 @@ impl PartialEq<FixedPoint> for f64 {
         FixedPoint::from_f64(*self) == *other
     }
 }
-impl PartialEq<FixedPoint> for f32 {
-    fn eq(&self, other: &FixedPoint) -> bool {
-        FixedPoint::from_f32(*self) == *other
-    }
-}
 
 impl PartialEq<f64> for FixedPoint {
     fn eq(&self, other: &f64) -> bool {
         FixedPoint::from_f64(*other) == *self
-    }
-}
-impl PartialEq<f32> for FixedPoint {
-    fn eq(&self, other: &f32) -> bool {
-        FixedPoint::from_f32(*other) == *self
     }
 }
 
