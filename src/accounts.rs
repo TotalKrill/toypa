@@ -233,6 +233,11 @@ impl<'a> Account {
             None
         }
     }
+
+    /// Get the account's locked.
+    pub fn locked(&self) -> bool {
+        self.locked
+    }
 }
 #[cfg(test)]
 mod tests {

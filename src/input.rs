@@ -1,7 +1,5 @@
 use crate::FixedPoint;
 
-use crate::simple_fp;
-
 use csv_async::AsyncDeserializer;
 use serde::Deserialize;
 use tokio::fs::File;
@@ -61,6 +59,8 @@ impl Input {
         self.tx
     }
 
+    #[cfg(test)]
+    /// only to create easier test transactions
     pub fn new(r#type: TransactionType, client: u16, tx: u32, amount: Option<f64>) -> Self {
         Self {
             r#type,

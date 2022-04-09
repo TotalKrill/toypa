@@ -21,6 +21,7 @@ async fn main() {
     let mut accounts = accounts::AccountStorage::new();
 
     let mut csv_iter = csv_reader.deserialize::<input::Input>();
+
     while let Some(csv_res) = csv_iter.next().await {
         // every entry is an result, we just ignore any faulty parsed input for this case
         if let Ok(input) = csv_res {
@@ -28,12 +29,15 @@ async fn main() {
             // if none exists, we should create one,
             // and then try to apply the transaction to that account if valid,
             if input.valid() {
-                let mut entry = accounts
+                let entry = accounts
                     .entry(input.client())
                     .or_insert(accounts::Account::new());
 
-                entry.handle_transaction(input);
+                // We could check how the transaction went, if we wanted to
+                let _res = entry.handle_transaction(input);
             }
         }
     }
+
+    output::print_from_accounts(accounts);
 }

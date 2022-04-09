@@ -1,6 +1,3 @@
-use std::num::ParseFloatError;
-
-use serde::Serializer;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 #[derive(Debug, PartialOrd, Copy, Clone, PartialEq, Eq, Ord)]
@@ -24,7 +21,12 @@ impl FixedPoint {
     }
     pub fn to_f32(self) -> f32 {
         let f = self.0 as f32;
-        let f = f * 1000.0;
+        let f = f / 1000.0;
+        f
+    }
+    pub fn to_f64(self) -> f64 {
+        let f = self.0 as f64;
+        let f = f / 1000.0;
         f
     }
 }
@@ -87,5 +89,7 @@ mod tests {
         let fp = FixedPoint::from_f64(v);
 
         assert_eq!(1234, fp.0);
+
+        assert_eq!(0.1234, fp.to_f64())
     }
 }
